@@ -348,6 +348,9 @@ bool MainWindow::updateSink(const pa_sink_info &info) {
 
     w->activePort = info.active_port ? info.active_port->name : "";
 
+    if (pa_context_get_server_protocol_version(get_context()) >= 27)
+        w->updateOffsetButton();
+
 #ifdef PA_SINK_SET_FORMATS
     w->setDigital(info.flags & PA_SINK_SET_FORMATS);
 #endif
@@ -496,6 +499,9 @@ void MainWindow::updateSource(const pa_source_info &info) {
         w->ports.push_back(std::pair<Glib::ustring,Glib::ustring>(i->name, i->description));
 
     w->activePort = info.active_port ? info.active_port->name : "";
+
+    if (pa_context_get_server_protocol_version(get_context()) >= 27)
+        w->updateOffsetButton();
 
     w->updating = false;
 

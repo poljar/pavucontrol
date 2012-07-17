@@ -39,6 +39,8 @@ DeviceWidget::DeviceWidget(BaseObjectType* cobject, const Glib::RefPtr<Gtk::Buil
     x->get_widget("defaultToggleButton", defaultToggleButton);
     x->get_widget("portSelect", portSelect);
     x->get_widget("portList", portList);
+    x->get_widget("offsetSelect", offsetSelect);
+    x->get_widget("latencyOffsetButton", latencyOffsetButton);
 
     this->signal_button_press_event().connect(sigc::mem_fun(*this, &DeviceWidget::onContextTriggerEvent));
     muteToggleButton->signal_clicked().connect(sigc::mem_fun(*this, &DeviceWidget::onMuteToggleButton));
@@ -54,9 +56,13 @@ DeviceWidget::DeviceWidget(BaseObjectType* cobject, const Glib::RefPtr<Gtk::Buil
     portList->pack_start(portModel.desc);
 
     portList->signal_changed().connect(sigc::mem_fun(*this, &DeviceWidget::onPortChange));
+    latencyOffsetButton->signal_value_changed().connect(sigc::mem_fun(*this, &DeviceWidget::onOffsetChange));
 
     for (unsigned i = 0; i < PA_CHANNELS_MAX; i++)
         channelWidgets[i] = NULL;
+
+    offsetAdjustment = Gtk::Adjustment::create(0.0, -2000.0, 2000.0, 10.0, 50.0, 0.0);
+    latencyOffsetButton->configure(offsetAdjustment, 0, 5);
 }
 
 void DeviceWidget::init(MainWindow* mainWindow, Glib::ustring deviceType) {
@@ -120,6 +126,60 @@ void DeviceWidget::onMuteToggleButton() {
 void DeviceWidget::onDefaultToggleButton() {
 }
 
+static void port_info_cb(pa_context *context, const pa_card_info *info, int eol, void *userdata) {
+    DeviceWidget *w = static_cast<DeviceWidget*>(userdata);
+
+    if (eol < 0) {
+        if (pa_context_errno(context) == PA_ERR_NOENTITY)
+            return;
+
+        show_error(_("Card callback failure"));
+        return;
+    }
+
+    if (eol > 0) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < info->n_ports; i++)
+        if (w->activePort == info->ports[i]->name) {
+            w->offsetButtonEnabled = false;
+            w->latencyOffsetButton->set_value(info->ports[i]->latency_offset / 1000.0);
+            w->offsetButtonEnabled = true;
+            break;
+        }
+}
+
+void DeviceWidget::updateOffsetButton() {
+    pa_operation *o;
+
+    if (!(o = pa_context_get_card_info_by_index(get_context(), card_index, port_info_cb, this))) {
+        show_error(_("pa_context_get_card_info_by_index() failed"));
+        return;
+    }
+    pa_operation_unref(o);
+}
+
+void DeviceWidget::onOffsetChange() {
+    pa_operation *o;
+    int64_t offset;
+    std::ostringstream card_stream;
+    Glib::ustring card_name;
+
+    if (!offsetButtonEnabled)
+        return;
+
+    offset = latencyOffsetButton->get_value() * 1000.0;
+    card_stream << card_index;
+    card_name = card_stream.str();
+
+    if (!(o = pa_context_set_port_latency_offset(get_context(), card_name.c_str(), activePort.c_str(), offset, NULL, NULL))) {
+        show_error(_("pa_context_set_port_latency_offset() failed"));
+        return;
+    }
+    pa_operation_unref(o);
+}
+
 void DeviceWidget::setDefault(bool isDefault) {
     defaultToggleButton->set_active(isDefault);
     /*defaultToggleButton->set_sensitive(!isDefault);*/
@@ -157,10 +217,18 @@ void DeviceWidget::prepareMenu() {
     if (active_idx >= 0)
         portList->set_active(active_idx);
 
-    if (ports.size() > 0)
+    if (ports.size() > 0) {
         portSelect->show();
-    else
+
+        if (pa_context_get_server_protocol_version(get_context()) >= 27)
+            offsetSelect->show();
+        else
+            offsetSelect->hide();
+
+    } else {
         portSelect->hide();
+        offsetSelect->hide();
+    }
 }
 
 bool DeviceWidget::onContextTriggerEvent(GdkEventButton* event) {
